@@ -180,12 +180,12 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin-bottom: 20px;
 }
 .stat {
-  padding: 14px 12px;
+  padding: 14px 10px;
   text-align: center;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -195,6 +195,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 }
 .stat-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--ink-soft); margin-bottom: 4px; }
 .stat-value { font-family: var(--font-num); font-size: 22px; font-weight: 700; color: var(--ink); }
+@media (max-width: 900px) {
+  .stats { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 640px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
 }
@@ -229,6 +232,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f
 
 .pie-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .pie-svg { width: 150px; height: 150px; }
+.pie-slice { cursor: pointer; transition: opacity 0.15s ease; }
+.pie-slice:hover { opacity: 0.72; }
 .pie-legend { width: 100%; max-width: 220px; }
 .legend-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
@@ -426,7 +431,8 @@ function renderPieChart(userRows) {
   const arcs = slices.map((s, i) => {
     const frac = s.value / totalTalk;
     const dash = frac * circumference;
-    const circle = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="${PIE_COLORS[i % PIE_COLORS.length]}" stroke-width="${STROKE}" stroke-dasharray="${dash.toFixed(2)} ${(circumference-dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${CX} ${CY})"></circle>`;
+    const pct = (frac * 100).toFixed(0);
+    const circle = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="${PIE_COLORS[i % PIE_COLORS.length]}" stroke-width="${STROKE}" stroke-dasharray="${dash.toFixed(2)} ${(circumference-dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${CX} ${CY})" class="pie-slice"><title>${esc(s.name)} — ${fmtDuration(s.value)} (${pct}%)</title></circle>`;
     offset += dash;
     return circle;
   }).join('');
@@ -504,9 +510,9 @@ function startAutoRefresh() {
   }, REFRESH_INTERVAL_MS);
 }
 
-function byUserRows() {
+function aggregateToUserRows(records) {
   const byUser = {};
-  for (const r of tlFilteredRecords()) {
+  for (const r of records) {
     if (!byUser[r.userId]) byUser[r.userId] = { userId: r.userId, userName: r.userName, dials: 0, talkSeconds: 0, connected: 0, days: new Set() };
     byUser[r.userId].dials += r.dials;
     byUser[r.userId].talkSeconds += r.talkSeconds;
@@ -518,6 +524,10 @@ function byUserRows() {
     days: u.days.size,
     avg: u.dials ? u.talkSeconds / u.dials : 0
   }));
+}
+
+function byUserRows() {
+  return aggregateToUserRows(tlFilteredRecords());
 }
 
 function byDayRows() {
@@ -567,8 +577,8 @@ function render() {
 
   const tlEntries = Object.entries(dataset.teamLeaders);
 
-  const userRows = byUserRows().sort((a,b) => b.avg - a.avg);
-  const maxAvg = Math.max(...userRows.map(u => u.avg), 1);
+  const userRows = aggregateToUserRows(statsScoped).sort((a,b) => b.talkSeconds - a.talkSeconds);
+  const maxTalk = Math.max(...userRows.map(u => u.talkSeconds), 1);
 
   app.innerHTML = `
     <div class="top">
@@ -595,6 +605,7 @@ function render() {
 
     <div class="stats">
       <div class="stat"><div class="stat-label">Total dials</div><div class="stat-value">${totalDials.toLocaleString()}</div></div>
+      <div class="stat"><div class="stat-label">Connected calls</div><div class="stat-value">${totalConnected.toLocaleString()}</div></div>
       <div class="stat"><div class="stat-label">Avg TT</div><div class="stat-value">${fmtDuration(avgTTPerUser)}</div></div>
       <div class="stat"><div class="stat-label">Team avg / dial</div><div class="stat-value">${fmtDuration(avgPerConnected)}</div></div>
       <div class="stat"><div class="stat-label">Users ≥1h TT · days</div><div class="stat-value">${usersOverHour} · ${daysInScope}</div></div>
@@ -602,13 +613,13 @@ function render() {
 
     <div class="charts-row">
       <div class="chart-block">
-        <div class="section-head"><h2>Avg talktime per dial, by user</h2></div>
+        <div class="section-head"><h2>Total talktime, by user</h2></div>
         ${userRows.map((u,i) => `
           <div class="bar-row">
             <div class="bar-rank">${i===0?'🥇':i===1?'🥈':i===2?'🥉':''}</div>
             <div class="bar-name">${esc(u.userName)}</div>
-            <div class="bar-track"><div class="bar-fill ${u.avg < avgAll ? 'low' : ''}" style="width:${(u.avg/maxAvg*100).toFixed(1)}%"></div></div>
-            <div class="bar-value">${fmtDuration(u.avg)}</div>
+            <div class="bar-track"><div class="bar-fill ${u.talkSeconds < avgTTPerUser ? 'low' : ''}" style="width:${(u.talkSeconds/maxTalk*100).toFixed(1)}%"></div></div>
+            <div class="bar-value">${fmtDuration(u.talkSeconds)}</div>
           </div>
         `).join('')}
       </div>
