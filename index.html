@@ -543,12 +543,28 @@ function render() {
     return;
   }
 
-  const scoped = tlFilteredRecords();
-  const totalDials = scoped.reduce((a,r) => a + r.dials, 0);
-  const totalTalk = scoped.reduce((a,r) => a + r.talkSeconds, 0);
-  const dates = [...new Set(scoped.map(r => r.date))].sort();
+  const allScoped = tlFilteredRecords();
+  const dates = [...new Set(allScoped.map(r => r.date))].sort();
+
+  const statsScoped = view === 'byDay'
+    ? allScoped
+        .filter(r => filterUser === 'all' || r.userId === filterUser)
+        .filter(r => filterDate === 'all' || r.date === filterDate)
+    : allScoped;
+
+  const totalDials = statsScoped.reduce((a,r) => a + r.dials, 0);
+  const totalTalk = statsScoped.reduce((a,r) => a + r.talkSeconds, 0);
+  const totalConnected = statsScoped.reduce((a,r) => a + r.connected, 0);
   const avgAll = totalDials ? totalTalk / totalDials : 0;
-  const userCount = new Set(scoped.map(r => r.userId)).size;
+  const avgPerConnected = totalConnected ? totalTalk / totalConnected : 0;
+  const userCount = new Set(statsScoped.map(r => r.userId)).size;
+  const avgTTPerUser = userCount ? totalTalk / userCount : 0;
+  const daysInScope = new Set(statsScoped.map(r => r.date)).size;
+
+  const talkByUser = {};
+  for (const r of statsScoped) talkByUser[r.userId] = (talkByUser[r.userId] || 0) + r.talkSeconds;
+  const usersOverHour = Object.values(talkByUser).filter(t => t >= 3600).length;
+
   const tlEntries = Object.entries(dataset.teamLeaders);
 
   const userRows = byUserRows().sort((a,b) => b.avg - a.avg);
@@ -579,9 +595,9 @@ function render() {
 
     <div class="stats">
       <div class="stat"><div class="stat-label">Total dials</div><div class="stat-value">${totalDials.toLocaleString()}</div></div>
-      <div class="stat"><div class="stat-label">Total talktime</div><div class="stat-value">${fmtDuration(totalTalk)}</div></div>
-      <div class="stat"><div class="stat-label">Team avg / dial</div><div class="stat-value">${fmtDuration(avgAll)}</div></div>
-      <div class="stat"><div class="stat-label">Users · days</div><div class="stat-value">${userCount} · ${dates.length}</div></div>
+      <div class="stat"><div class="stat-label">Avg TT</div><div class="stat-value">${fmtDuration(avgTTPerUser)}</div></div>
+      <div class="stat"><div class="stat-label">Team avg / dial</div><div class="stat-value">${fmtDuration(avgPerConnected)}</div></div>
+      <div class="stat"><div class="stat-label">Users ≥1h TT · days</div><div class="stat-value">${usersOverHour} · ${daysInScope}</div></div>
     </div>
 
     <div class="charts-row">
@@ -608,8 +624,12 @@ function render() {
         <button class="tab-btn ${view==='byUser'?'active':''}" data-view="byUser">By user</button>
         <button class="tab-btn ${view==='byDay'?'active':''}" data-view="byDay">By day</button>
       </div>
-      ${view === 'byDay' ? `
-        <div class="filters">
+      <div class="filters">
+        <select id="filter-tl-table">
+          <option value="all" ${filterTL==='all'?'selected':''}>All team leaders</option>
+          ${tlEntries.map(([id,name]) => `<option value="${id}" ${filterTL===id?'selected':''}>${esc(name)}</option>`).join('')}
+        </select>
+        ${view === 'byDay' ? `
           <select id="filter-user">
             <option value="all">All users</option>
             ${Object.entries(dataset.users)
@@ -620,13 +640,14 @@ function render() {
             <option value="all">All dates</option>
             ${dates.map(d => `<option value="${d}" ${filterDate===d?'selected':''}>${fmtDate(d)}</option>`).join('')}
           </select>
-        </div>
-      ` : ''}
+        ` : ''}
+        <button class="manage-btn" id="download-csv-btn">⬇ Download CSV</button>
+      </div>
     </div>
 
     <div class="table-card">${renderTable(avgAll)}</div>
 
-    <p class="foot-note">Avg / dial = total talktime ÷ total dials for that row. Crimson marks above the team average, black marks below it. Talktime column is heat-mapped: green = highest, cream/yellow = mid, red = lowest (relative to the rows currently shown).</p>
+    <p class="foot-note">Avg / dial (table) = total talktime ÷ total dials for that row. Avg TT = total talktime ÷ number of users in scope. Team Avg/Dial tile = total talktime ÷ connected calls. "Users ≥1h TT" counts only users whose total talktime in the current scope is 1 hour or more. Talktime column is heat-mapped: green = highest, cream/yellow = mid, red = lowest.</p>
 
     <p class="site-credit">Created by Wasil — for any help or suggestions, please connect <a href="mailto:wasil.khan@pw.live">wasil.khan@pw.live</a></p>
   `;
@@ -642,6 +663,8 @@ function render() {
   });
   const ftl = document.getElementById('filter-tl');
   if (ftl) ftl.addEventListener('change', () => { filterTL = ftl.value; filterUser = 'all'; render(); });
+  const ftlTable = document.getElementById('filter-tl-table');
+  if (ftlTable) ftlTable.addEventListener('change', () => { filterTL = ftlTable.value; filterUser = 'all'; render(); });
   const manageBtn = document.getElementById('manage-tl-btn');
   if (manageBtn) manageBtn.addEventListener('click', openManageModal);
   document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => { view = b.dataset.view; render(); }));
@@ -649,6 +672,8 @@ function render() {
   if (fu) fu.addEventListener('change', () => { filterUser = fu.value; render(); });
   const fd = document.getElementById('filter-date');
   if (fd) fd.addEventListener('change', () => { filterDate = fd.value; render(); });
+  const dlBtn = document.getElementById('download-csv-btn');
+  if (dlBtn) dlBtn.addEventListener('click', downloadTableCSV);
   document.querySelectorAll('th[data-sort]').forEach(th => {
     th.addEventListener('click', () => {
       const key = th.dataset.sort;
@@ -671,6 +696,46 @@ function heatColor(t) {
   const localT = (t - lo[0]) / span;
   const c = lo[1].map((v, i) => Math.round(v + (hi[1][i] - v) * localT));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function downloadTableCSV() {
+  const rows = view === 'byUser' ? byUserRows() : byDayRows();
+  rows.sort((a,b) => {
+    const va = a[sortKey], vb = b[sortKey];
+    const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+  if (rows.length === 0) { alert('No rows to download for the current filters.'); return; }
+
+  const cols = view === 'byUser'
+    ? [['userName','User'],['dials','Dials'],['talkSeconds','Talktime'],['avg','Avg / dial'],['connected','Connected'],['days','Days']]
+    : [['date','Date'],['userName','User'],['dials','Dials'],['talkSeconds','Talktime'],['avg','Avg / dial'],['connected','Connected']];
+
+  const csvEscape = (v) => {
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  const lines = [cols.map(([,label]) => csvEscape(label)).join(',')];
+  for (const r of rows) {
+    const line = cols.map(([key]) => {
+      if (key === 'date') return csvEscape(fmtDate(r.date));
+      if (key === 'talkSeconds' || key === 'avg') return csvEscape(fmtDuration(r[key]));
+      return csvEscape(r[key]);
+    }).join(',');
+    lines.push(line);
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const tlLabel = filterTL !== 'all' ? '_' + dataset.teamLeaders[filterTL].replace(/\s+/g, '') : '';
+  a.href = url;
+  a.download = `talktime_${view}${tlLabel}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function renderTable(avgAll) {
